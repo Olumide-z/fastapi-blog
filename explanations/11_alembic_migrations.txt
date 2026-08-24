@@ -1,0 +1,87 @@
+================================================================
+FILE: alembic/  +  alembic.ini
+TOPIC: Database Migrations with Alembic (PostgreSQL)
+================================================================
+
+PURPOSE
+-------
+Alembic is a lightweight database migration tool for SQLAlchemy.
+When developing applications with relational databases like PostgreSQL, you need a safe,
+version-controlled way to update database table structures (adding columns, creating tables,
+modifying constraints) without dropping existing data.
+
+----------------------------------------------------------------
+WHY ALEMBIC IS ESSENTIAL
+----------------------------------------------------------------
+In early development, running `Base.metadata.create_all` creates missing tables. However, it
+CANNOT alter existing tables (e.g. adding a new `likes` column to `posts` or creating a new
+`password_reset_tokens` table on a live database).
+
+Alembic tracks database revisions over time, generating versioned migration scripts that
+can upgrade or downgrade your PostgreSQL database safely across environments.
+
+----------------------------------------------------------------
+FILE STRUCTURE & CONFIGURATION
+----------------------------------------------------------------
+
+1. alembic.ini
+   ------------
+   The configuration file for Alembic. Specifies logging settings and migration directory locations.
+
+2. alembic/env.py
+   ----------------
+   The execution script that connects Alembic to your FastAPI application and SQLAlchemy models:
+
+   - Reads application database URL from `config.py` settings:
+       config.set_main_option("sqlalchemy.url", settings.database_url)
+
+   - Sets `target_metadata = Base.metadata` so Alembic can compare your SQLAlchemy models (`models.py`)
+     against the current PostgreSQL database schema.
+
+   - Configures async migration execution using `async_engine_from_config`:
+       async def run_async_migrations():
+           connectable = async_engine_from_config(
+               config.get_section(config.config_ini_section, {}),
+               prefix="sqlalchemy.",
+               poolclass=pool.NullPool,
+           )
+
+   - Windows Event Loop Fix:
+       if sys.platform == "win32":
+           asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+     This ensures `psycopg` async driver operates correctly under Windows.
+
+3. alembic/versions/
+   ------------------
+   Contains python migration scripts. Each script contains an `upgrade()` and `downgrade()` function.
+
+   Examples in this repository:
+   - `ad7a0041129f_initial_schema.py`: Creates `users` and `posts` tables.
+   - `0ef11bff10ec_add_likes_to_posts.py`: Adds `likes` column to `posts` table with default value 0.
+
+----------------------------------------------------------------
+CLI WORKFLOW COMMANDS
+----------------------------------------------------------------
+
+1. Generate Migration Script (Autogenerate):
+   Compares models in `models.py` against active PostgreSQL schema and creates a new migration file:
+
+       alembic revision --autogenerate -m "Add password reset tokens table"
+
+2. Apply Migrations to PostgreSQL:
+   Runs all pending `upgrade()` functions up to the latest revision:
+
+       alembic upgrade head
+
+3. Rollback Previous Migration:
+   Runs the `downgrade()` function of the latest revision:
+
+       alembic downgrade -1
+
+4. Check Migration Status & History:
+   View currently applied revision and full migration history:
+
+       alembic current
+       alembic history
+
+================================================================

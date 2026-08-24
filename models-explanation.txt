@@ -1,0 +1,69 @@
+In 
+
+models.py
+you are using SQLAlchemy 2.0 to define your database tables as Python classes.
+
+While 
+
+schemas.py
+ handles input/output validation for FastAPI, 
+
+models.py
+ defines the actual SQL database structure (tables, columns, data types, and relationships).
+
+Key Concepts
+Base: Inherited from 
+
+database.py
+. Every class inheriting from Base becomes a database table.
+Mapped[...] & mapped_column(...): Modern SQLAlchemy 2.0 syntax. Mapped[type] tells Python the data type, and mapped_column() tells the database how to configure the SQL column.
+Relationships: Links tables together so you can easily access related data in Python code (e.g., getting a user's posts via user.posts).
+Detailed Code Breakdown
+
+1. Imports & Base setup (lines 1–11)
+
+from database import Base
+This connects your models to SQLAlchemy's DeclarativeBase created in database.py.
+
+2. The User Model (lines 14–28)
+This class creates the users table in your database.
+
+__tablename__ = "users": Tells the database to name this SQL table users.
+
+id: Primary Key (unique ID for every user, indexed for fast database searches).
+
+username: String up to 50 characters, must be unique (unique=True), and cannot be empty (nullable=False).
+
+email: String up to 120 characters, unique, and required.
+
+image_file: Optional profile picture path (str | None), defaults to None.
+
+posts: A relationship pointing to Post. It doesn't create a column in the SQL users table; instead, it allows you to access a user's posts in Python (user.posts will return a list of Post objects).
+
+3. The Post Model (lines 31–47)
+This class creates the posts table in your database.
+
+__tablename__ = "posts": Names the database table posts.
+
+id: Primary Key for each blog post.
+
+title: String up to 100 characters, required.
+
+content: Text field (can hold long strings), required.
+
+user_id: Foreign Key (ForeignKey("users.id")). Stores the id of the User who wrote this post. This links the posts table to the users table.
+
+date_posted: Stores the date and time when the post was created, automatically defaulting to the current time (datetime.now(UTC)).
+
+author: The inverse of User.posts. Allows you to easily get the user object for any post in Python (post.author).
+
+How the Relationship Works (back_populates)
+
+# In User model:
+posts: Mapped[list[Post]] = relationship(back_populates="author")
+
+# In Post model:
+author: Mapped[User] = relationship(back_populates="posts")
+back_populates links User.posts and Post.author together.
+
+If you create a post and set post.author = current_user, SQLAlchemy automatically updates current_user.posts to include that post!

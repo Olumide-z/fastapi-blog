@@ -1,0 +1,134 @@
+================================================================
+FILE: tests/  +  conftest.py
+TOPIC: Automated Testing with Pytest, Async Fixtures & Isolated DB Transactions
+================================================================
+
+PURPOSE
+-------
+Explains automated test suites using `pytest`, `pytest-asyncio` / `anyio`, isolated PostgreSQL
+test database setup, savepoint transaction rollbacks, `httpx.AsyncClient` ASGI integration,
+dependency overrides, and S3 AWS mocking with `moto`.
+
+----------------------------------------------------------------
+TEST DIRECTORY STRUCTURE
+----------------------------------------------------------------
+
+tests/
+  ├── conftest.py      (Pytest configuration, fixtures, DB transaction isolation, helpers)
+  ├── test_users.py    (User registration, login, profile picture upload, password reset tests)
+  ├── test_posts.py    (Post creation, fetching, unauthorized editing, pagination tests)
+  └── test_demo.py     (Basic test sanity checks)
+
+----------------------------------------------------------------
+KEY CONCEPTS IN conftest.py
+----------------------------------------------------------------
+
+1. WINDOWS EVENT LOOP POLICY FIX
+   ------------------------------
+   if sys.platform == "win32":
+       asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+   Configures Python on Windows to use `SelectorEventLoop` required by `psycopg` for async sockets.
+
+2. ENVIRONMENT OVERRIDES FOR TEST DATABASE
+   ----------------------------------------
+   os.environ["DATABASE_URL"] = "postgresql+psycopg://bloguser:blogpass@localhost/test_blog"
+
+   Redirects test execution to a dedicated test PostgreSQL database (`test_blog`), ensuring
+   production and development databases remain untouched.
+
+3. ANYIO ASYNC BACKEND FIXTURE
+   ----------------------------
+   pytest_plugins = ["anyio"]
+
+   @pytest.fixture(scope="session")
+   def anyio_backend():
+       return "asyncio"
+
+   Allows pytest to execute `@pytest.mark.anyio` async test functions under `asyncio`.
+
+4. SESSION DATABASE SETUP FIXTURE
+   -------------------------------
+   @pytest.fixture(scope="session")
+   async def setup_database(test_engine):
+       async with test_engine.begin() as conn:
+           await conn.run_sync(Base.metadata.create_all)
+       yield
+       async moss conn:
+           await conn.run_sync(Base.metadata.drop_all)
+
+   Creates all tables in PostgreSQL `test_blog` database at the start of the test session, and drops
+   them when the entire test suite completes.
+
+5. ISOLATED TRANSACTION ROLLBACK FIXTURE (db_session)
+   --------------------------------------------------
+   @pytest.fixture
+   async def db_session(test_engine, setup_database) -> AsyncGenerator[AsyncSession]:
+       conn = await test_engine.connect()
+       trans = await conn.begin()
+       test_async_session = async_sessionmaker(
+           bind=conn,
+           class_=AsyncSession,
+           expire_on_commit=False,
+           join_transaction_mode="create_savepoint",
+       )
+       async with test_async_session() as session:
+           try:
+               yield session
+           finally:
+               await session.close()
+               await trans.rollback()
+               await conn.close()
+
+   CRITICAL ISOLATION PATTERN:
+   - Each test function runs inside its own nested database transaction (savepoint).
+   - After the test completes, `await trans.rollback()` undoes all inserted/updated records.
+   - Tests execute blazingly fast and never contaminate each other's test data.
+
+6. FASTAPI ASYNC HTTP CLIENT & DEPENDENCY OVERRIDES
+   -------------------------------------------------
+   @pytest.fixture
+   async def client(db_session: AsyncSession, mocked_aws) -> AsyncGenerator[AsyncClient]:
+       async def override_get_db():
+           yield db_session
+
+       app.dependency_overrides[get_db] = override_get_db
+
+       async with AsyncClient(
+           transport=ASGITransport(app=app),
+           base_url="http://test",
+       ) as ac:
+           yield ac
+
+       app.dependency_overrides.clear()
+
+   - `app.dependency_overrides[get_db]` injects the isolated test transaction session into FastAPI routes.
+   - `AsyncClient(transport=ASGITransport(app=app))` invokes the FastAPI application directly in-memory without launching a real network HTTP server.
+
+7. MOCKING AWS & BACKGROUND TASKS
+   -------------------------------
+   - AWS S3 Mocking: Uses `moto` (`mock_aws()`) to simulate S3 bucket file uploads during profile picture tests.
+   - Email Mocking: Uses `unittest.mock.patch("routers.users.send_password_reset_email")` with `AsyncMock` to verify emails are queued without attempting to connect to external SMTP servers during unit testing.
+
+----------------------------------------------------------------
+WRITING AND RUNNING TESTS
+----------------------------------------------------------------
+
+Example test function:
+
+@pytest.mark.anyio
+async def test_create_user_success(client: AsyncClient):
+    response = await client.post(
+        "/api/users",
+        json={"username": "newuser", "email": "newuser@example.com", "password": "securepassword123"},
+    )
+    assert response.status_code == 201
+    assert response.json()["username"] == "newuser"
+
+RUNNING TESTS IN THE TERMINAL:
+- Run all tests: `pytest`
+- Run verbose mode: `pytest -v`
+- Run single test file: `pytest tests/test_users.py`
+- Run specific test function: `pytest tests/test_users.py -k test_create_user_success`
+
+================================================================

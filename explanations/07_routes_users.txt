@@ -1,0 +1,74 @@
+================================================================
+FILE: routers/users.py
+TOPIC: User API Routes (CRUD, Auth, Password Reset & Profile Pictures)
+================================================================
+
+PURPOSE
+-------
+Defines HTTP endpoints for registration, authentication token issuance, profile
+management, password reset workflows, and user post listing.
+
+----------------------------------------------------------------
+ROUTES SUMMARY
+----------------------------------------------------------------
+
+1. POST /api/users (Register User)
+   - Accepts `UserCreate` schema.
+   - Verifies username and email uniqueness in PostgreSQL database (case-insensitive).
+   - Hashes password using `hash_password()`.
+   - Saves new user record and returns `UserPrivate`.
+
+2. POST /api/users/token (Login / Token Endpoint)
+   - Accepts `OAuth2PasswordRequestForm`.
+   - Validates credentials and returns JWT `Token`.
+
+3. GET /api/users/me (Current User Profile)
+   - Injects `CurrentUser` dependency (`get_current_user`).
+   - Returns authenticated user's `UserPrivate` profile.
+
+4. POST /api/users/forgot-password (Request Password Reset)
+   - Accepts `ForgotPasswordRequest` (`email`).
+   - Looks up user by email in PostgreSQL.
+   - Deletes any existing active reset tokens for this user.
+   - Generates raw `token` and computes `token_hash`.
+   - Saves `PasswordResetToken` in DB with expiration time (`settings.reset_token_expire_minutes`).
+   - Queues email sending via FastAPI `BackgroundTasks`:
+       background_tasks.add_task(
+           send_password_reset_email,
+           to_email=user.email,
+           username=user.username,
+           token=token,
+       )
+   - Returns generic success message (HTTP 202 Accepted) regardless of whether email exists (prevents account enumeration attacks).
+
+5. POST /api/users/reset-password (Reset Password with Token)
+   - Accepts `PasswordResetRequest` (`token`, `new_password`).
+   - Hashes incoming token (`hash_reset_token`) and looks up matching `PasswordResetToken` record in DB.
+   - Validates expiration (`expires_at < datetime.now(UTC)`).
+   - Hashes and updates user password in PostgreSQL database.
+   - Deletes used reset tokens.
+
+6. PATCH /api/users/me/password (Change Password)
+   - Accepts `ChangePasswordRequest` (`current_password`, `new_password`) and `CurrentUser`.
+   - Verifies `current_password` against stored `password_hash`.
+   - Updates `password_hash` and purges any pending reset tokens.
+
+7. GET /api/users/{user_id} (Public Profile)
+   - Returns `UserPublic` schema (conceals private email address).
+
+8. GET /api/users/{user_id}/posts (User's Posts with Pagination)
+   - Accepts `skip: int = 0` and `limit: int = 10` query parameters.
+   - Fetches paginated posts created by specified user with `selectinload(Post.author)`.
+   - Returns `PaginatedPostsResponse` containing `posts`, `total`, `skip`, `limit`, `has_more`.
+
+9. PATCH /api/users/{user_id} (Update Profile Details)
+   - Authorizes that `current_user.id == user_id`.
+   - Updates username or email after verifying uniqueness.
+
+10. DELETE /api/users/{user_id} (Delete Account)
+    - Deletes user from database. `cascade="all, delete-orphan"` automatically purges associated posts and reset tokens. Deletes profile image file.
+
+11. PATCH /api/users/{user_id}/picture & DELETE /api/users/{user_id}/picture
+    - Uploads/removes profile picture using Pillow image processing (`process_profile_image`).
+
+================================================================

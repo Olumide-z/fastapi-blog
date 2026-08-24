@@ -1,0 +1,55 @@
+================================================================
+TOPIC: How It All Connects — Complete System Architecture
+================================================================
+
+PURPOSE
+-------
+This file provides a high-level overview of how all components in the repository
+interact across database persistence (PostgreSQL), schema migrations (Alembic),
+asynchronous background processing (BackgroundTasks & Email), and automated testing (pytest).
+
+----------------------------------------------------------------
+DEPENDENCY HIERARCHY
+----------------------------------------------------------------
+
+main.py
+  ├── config.py             (Reads .env settings, PostgreSQL URL, mail credentials)
+  ├── database.py           (create_async_engine with psycopg, get_db session provider)
+  ├── models.py             (User, Post, PasswordResetToken ORM models)
+  ├── schemas.py            (Pydantic schemas for requests, responses, pagination)
+  ├── auth.py               (Argon2 password hashing, JWT access tokens, SHA-256 reset tokens)
+  ├── email_utils.py        (aiosmtplib email sending with Jinja2 HTML templates)
+  ├── routers/
+  │   ├── users.py          (User CRUD, login, password reset, profile image uploads)
+  │   └── posts.py          (Post CRUD, likes, pagination, author relationships)
+  └── alembic/              (Alembic database schema migrations)
+
+----------------------------------------------------------------
+COMPLETE APPLICATION FLOWS
+----------------------------------------------------------------
+
+FLOW A: POSTGRESQL & ALEMBIC MIGRATIONS
+1. Models defined in `models.py` inherit from `database.Base`.
+2. Developer runs `alembic revision --autogenerate -m "..."`.
+3. Alembic inspects `models.Base.metadata` against active PostgreSQL database state.
+4. Generated migration scripts in `alembic/versions/` are executed using `alembic upgrade head`.
+
+FLOW B: PASSWORD RESET & BACKGROUND TASKS
+1. User calls `POST /api/users/forgot-password` with email.
+2. `routers/users.py` checks PostgreSQL database for matching User.
+3. Generates secure random token (`secrets.token_urlsafe`), computes SHA-256 hash (`hash_reset_token`), and saves `PasswordResetToken` in PostgreSQL.
+4. FastAPI `BackgroundTasks` receives `background_tasks.add_task(send_password_reset_email, ...)`.
+5. HTTP 202 response is returned immediately to caller without blocking on SMTP network latency.
+6. In background thread/loop, `email_utils.py` renders Jinja2 template (`templates/email/password_reset.html`) and dispatches email asynchronously via `aiosmtplib`.
+7. User opens link (`/reset-password?token=...`), sends `POST /api/users/reset-password`.
+8. Server computes SHA-256 hash of submitted token, verifies against `token_hash` in PostgreSQL, updates user password, and clears reset tokens.
+
+FLOW C: AUTOMATED TESTING WITH PYTEST
+1. `pytest` loads `tests/conftest.py`.
+2. Sets environment override `DATABASE_URL` to test database (`test_blog`).
+3. `setup_database` fixture creates PostgreSQL tables (`Base.metadata.create_all`).
+4. `db_session` fixture opens transaction savepoints per test and rolls back changes after each test, ensuring database test isolation.
+5. `httpx.AsyncClient` makes HTTP requests to FastAPI application using ASGI transport.
+6. Dependency override `app.dependency_overrides[get_db]` injects isolated test session into FastAPI routes.
+
+================================================================

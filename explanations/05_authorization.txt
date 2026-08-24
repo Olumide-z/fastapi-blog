@@ -1,0 +1,153 @@
+================================================================
+TOPIC: Authorization — What Users Are Allowed To Do
+================================================================
+
+PURPOSE
+-------
+Authorization is different from authentication:
+
+  Authentication = "Who are you?" (Login / JWT)
+  Authorization  = "What are you ALLOWED to do?" (Permissions)
+
+In this app, authorization is simple but important:
+  - Any logged-in user can create posts
+  - Only the OWNER of a post can update or delete it
+  - Only the OWNER of an account can update or delete it
+  - Anyone (even unauthenticated) can READ posts and user profiles
+
+Authorization is enforced manually inside the route functions —
+there is no dedicated authorization file, it's handled inline.
+
+----------------------------------------------------------------
+WHERE AUTHORIZATION HAPPENS
+----------------------------------------------------------------
+
+1. POSTS — routers/posts.py
+   -------------------------
+
+   UPDATE POST (PUT /api/posts/{post_id}):
+   ----------------------------------------
+   if post.user_id != current_user.id:
+       raise HTTPException(
+           status_code=status.HTTP_403_FORBIDDEN,
+           detail='Not authorized to update this post'
+       )
+
+   DELETE POST (DELETE /api/posts/{post_id}):
+   -------------------------------------------
+   if post.user_id != current_user.id:
+       raise HTTPException(
+           status_code=status.HTTP_403_FORBIDDEN,
+           detail='Not authorized to update this post'
+       )
+
+   LOGIC:
+   - We fetch the post from the database to get its user_id (owner's id)
+   - We compare it to current_user.id (from the JWT token)
+   - If they don't match -> 403 Forbidden (you're logged in but not allowed)
+   - If they match -> proceed with the update/delete
+
+
+2. USERS — routers/users.py
+   -------------------------
+
+   UPDATE USER (PATCH /api/users/{user_id}):
+   ------------------------------------------
+   if user_id != current_user.id:
+       raise HTTPException(
+           status_code=status.HTTP_403_FORBIDDEN,
+           detail='Not authorized to update this user'
+       )
+
+   DELETE USER (DELETE /api/users/{user_id}):
+   -------------------------------------------
+   if user_id != current_user.id:
+       raise HTTPException(
+           status_code=status.HTTP_403_FORBIDDEN,
+           detail='Not authorized to delete this user'
+       )
+
+   LOGIC:
+   - The user_id comes from the URL path (/api/users/5)
+   - current_user.id comes from the JWT token (verified in auth.py)
+   - If they don't match -> 403 Forbidden
+
+----------------------------------------------------------------
+HTTP STATUS CODES FOR AUTH
+----------------------------------------------------------------
+
+401 Unauthorized
+-> You are NOT authenticated (no token, invalid token, expired token)
+-> Example: trying to access a protected route without logging in
+
+403 Forbidden
+-> You ARE authenticated, but you don't have PERMISSION
+-> Example: trying to delete someone else's post while logged in
+
+404 Not Found
+-> The resource doesn't exist (used before checking ownership,
+   so you don't reveal whether a resource exists to unauthorized users)
+
+----------------------------------------------------------------
+THE PATTERN USED IN EVERY PROTECTED ROUTE
+----------------------------------------------------------------
+
+Every route that requires authorization follows this pattern:
+
+Step 1: Get the logged-in user (via CurrentUser dependency)
+        This automatically returns 401 if not authenticated.
+
+Step 2: Fetch the resource from the database
+        Return 404 if it doesn't exist.
+
+Step 3: Check ownership
+        if resource.user_id != current_user.id:
+            raise HTTPException(403, "Not authorized")
+
+Step 4: Perform the operation
+
+Example (delete post):
+    @router.delete("/{post_id}", status_code=204)
+    async def delete_post(
+        post_id: int,
+        current_user: CurrentUser,   # Step 1: must be logged in
+        db: ...
+    ):
+        post = await db.execute(select(Post).where(Post.id == post_id))
+        post = post.scalars().first()
+
+        if not post:                                          # Step 2
+            raise HTTPException(404, 'Post not found')
+
+        if post.user_id != current_user.id:                  # Step 3
+            raise HTTPException(403, 'Not authorized')
+
+        await db.delete(post)                                 # Step 4
+        await db.commit()
+
+----------------------------------------------------------------
+PUBLIC vs PROTECTED ROUTES
+----------------------------------------------------------------
+
+PUBLIC (no login needed):
+  GET /                        -> home page (all posts)
+  GET /posts/{id}              -> single post page
+  GET /api/posts               -> all posts (JSON)
+  GET /api/posts/{id}          -> single post (JSON)
+  GET /api/users/{id}          -> public user profile
+  POST /api/users              -> register (create account)
+  POST /api/users/token        -> login (get JWT)
+
+PROTECTED (must be logged in — CurrentUser dependency):
+  GET  /api/users/me           -> your own profile
+  PATCH /api/users/{id}        -> update your account (+ ownership check)
+  DELETE /api/users/{id}       -> delete your account (+ ownership check)
+  POST /api/posts              -> create a post
+  PUT  /api/posts/{id}         -> replace a post (+ ownership check)
+  PATCH /api/posts/{id}        -> update a post (+ ownership check)
+  DELETE /api/posts/{id}       -> delete a post (+ ownership check)
+
+A route is "protected" simply by including CurrentUser in its parameters.
+FastAPI will then always run the get_current_user() dependency first.
+
+================================================================

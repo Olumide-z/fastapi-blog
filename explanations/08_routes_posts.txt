@@ -1,0 +1,187 @@
+================================================================
+FILE: routers/posts.py
+TOPIC: Post API Routes (CRUD)
+================================================================
+
+PURPOSE
+-------
+This file handles all API operations for blog posts:
+  - List all posts
+  - Get a single post
+  - Create a post
+  - Update a post (fully or partially)
+  - Delete a post
+
+Mounted in main.py as: prefix="/api/posts"
+So @router.get("") = GET /api/posts
+
+----------------------------------------------------------------
+ROUTE 1: GET "" -> GET /api/posts (List All Posts)
+----------------------------------------------------------------
+
+@router.get('', response_model=list[PostResponse])
+async def get_posts(db: Annotated[AsyncSession, Depends(get_db)]):
+    result = await db.execute(
+        select(models.Post).options(selectinload(models.Post.author))
+    )
+    posts = result.scalars().all()
+    return posts
+
+- No authentication needed — anyone can view posts
+- response_model=list[PostResponse] means return an array of PostResponse objects
+- selectinload(models.Post.author) eagerly loads the author for each post
+  in a single extra query (efficient)
+- result.scalars().all() extracts the Post objects from the query result
+
+WHAT selectinload DOES:
+Instead of running one query per post to get the author (N+1 problem),
+SQLAlchemy runs:
+  Query 1: SELECT * FROM posts
+  Query 2: SELECT * FROM users WHERE id IN (1, 2, 3, ...)  <- all at once
+This is much more efficient for large datasets.
+
+----------------------------------------------------------------
+ROUTE 2: GET "/{post_id}" -> GET /api/posts/5 (Single Post)
+----------------------------------------------------------------
+
+@router.get("/{post_id}", response_model=PostResponse)
+async def get_post(post_id: int, db: ...):
+    result = await db.execute(
+        select(models.Post)
+        .options(selectinload(models.Post.author))
+        .where(models.Post.id == post_id)
+    )
+    post = result.scalars().first()
+
+    if post:
+        return post
+    raise HTTPException(status_code=404, detail='Post not found')
+
+- .where(models.Post.id == post_id) filters to just that one post
+- .first() returns the first result or None if nothing matched
+- No auth needed — public endpoint
+
+----------------------------------------------------------------
+ROUTE 3: POST "" -> POST /api/posts (Create Post)
+----------------------------------------------------------------
+
+@router.post("", response_model=PostResponse, status_code=201)
+async def create_post(
+    post: PostCreate,
+    current_user: CurrentUser,     <- must be logged in
+    db: ...
+):
+    new_post = models.Post(
+        title=post.title,
+        content=post.content,
+        user_id=current_user.id    <- taken from the JWT, not from the client
+    )
+
+    db.add(new_post)
+    await db.commit()
+    await db.refresh(new_post, attribute_names=["author"])
+    return new_post
+
+IMPORTANT DETAIL:
+user_id=current_user.id
+The client never sends the user_id. It's taken from the authenticated user's
+token. This prevents a user from creating posts "as" someone else.
+
+await db.refresh(new_post, attribute_names=["author"])
+After committing, the new_post object exists in the DB but its "author"
+relationship is not loaded yet. This refresh tells SQLAlchemy:
+"reload the 'author' attribute for this object from the database."
+Without this, returning new_post would fail because PostResponse needs
+the author field, which would be unloaded (lazy loading doesn't work well
+in async contexts after a session is closed).
+
+----------------------------------------------------------------
+ROUTE 4: PUT "/{post_id}" -> Full Update (Replace)
+----------------------------------------------------------------
+
+@router.put("/{post_id}", response_model=PostResponse)
+async def update_post_full(post_id: int, post_data: PostCreate, current_user: CurrentUser, db: ...):
+
+PUT = full update. The client sends ALL fields.
+PostCreate is reused here (title + content both required).
+
+WHAT IT DOES:
+1. Fetch post from DB -> 404 if not found
+2. Authorization check: post.user_id != current_user.id -> 403
+3. Replace both fields:
+   post.title = post_data.title
+   post.content = post_data.content
+4. Commit, refresh author, return
+
+await db.refresh(post, attribute_names=['author'])
+Same reason as in create_post — we need the author for PostResponse.
+
+----------------------------------------------------------------
+ROUTE 5: PATCH "/{post_id}" -> Partial Update
+----------------------------------------------------------------
+
+@router.patch("/{post_id}", response_model=PostResponse)
+async def update_post_partial(post_id: int, post_data: PostUpdate, current_user: CurrentUser, db: ...):
+
+PATCH = partial update. Client only sends the fields they want to change.
+PostUpdate has all fields as optional (title | None, content | None).
+
+KEY DIFFERENCE FROM PUT:
+    update_data = post_data.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(post, field, value)
+
+model_dump(exclude_unset=True)
+-> Only returns fields that the client actually sent in the request.
+   If the client only sent {"title": "New Title"}, this gives:
+   {"title": "New Title"}
+   (content is excluded because the client didn't send it)
+
+setattr(post, field, value)
+-> Dynamically sets attributes on the post object.
+   Equivalent to: post.title = "New Title"
+   But works for any field without writing if-statements for each one.
+
+So the pattern is: only update what was explicitly sent.
+
+----------------------------------------------------------------
+ROUTE 6: DELETE "/{post_id}" -> Delete Post
+----------------------------------------------------------------
+
+@router.delete("/{post_id}", status_code=204)
+async def delete_post(post_id: int, current_user: CurrentUser, db: ...):
+    1. Fetch post -> 404 if not found
+    2. Authorization check -> 403 if not owner
+    3. await db.delete(post)
+    4. await db.commit()
+    -> Returns 204 No Content
+
+----------------------------------------------------------------
+PUT vs PATCH — WHEN TO USE WHICH
+----------------------------------------------------------------
+
+PUT   -> Replace the entire resource. All fields required.
+         If you omit a field, it gets cleared/reset.
+
+PATCH -> Partial update. Only send what you want to change.
+         Unset fields keep their current values.
+
+In this app, PUT reuses PostCreate (requires both title + content),
+while PATCH uses PostUpdate (both fields optional).
+
+----------------------------------------------------------------
+THE ASYNC/AWAIT PATTERN
+----------------------------------------------------------------
+
+All database operations use async/await:
+
+    result = await db.execute(select(models.Post)...)
+    posts = result.scalars().all()
+
+"await" means: "pause this function here and let other requests run
+while waiting for the database to respond." This is what makes FastAPI
+efficient — it can handle many concurrent requests without blocking.
+
+Without async, your app would freeze while waiting for each DB query.
+
+================================================================

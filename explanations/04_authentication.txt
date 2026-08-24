@@ -1,0 +1,81 @@
+================================================================
+FILE: auth.py
+TOPIC: Authentication, JWTs, Password Hashing & Reset Tokens
+================================================================
+
+PURPOSE
+-------
+Authentication handles identity verification, JWT access token generation,
+password hashing, password reset token security, and the `get_current_user` dependency.
+
+----------------------------------------------------------------
+KEY CONCEPTS & SECURITY FLOWS
+----------------------------------------------------------------
+
+1. PASSWORD HASHING (pwdlib & Argon2)
+   -----------------------------------
+   password_hash = PasswordHash.recommended()
+
+   def hash_password(password: str) -> str:
+       return password_hash.hash(password)
+
+   def verify_password(plain_password: str, hashed_password: str) -> bool:
+       return password_hash.verify(plain_password, hashed_password)
+
+   Passwords are never stored in plaintext. `pwdlib` uses Argon2 hashing by default.
+
+
+2. JWT (JSON WEB TOKENS)
+   ----------------------
+   - create_access_token(data, expires_delta): Encodes `sub` (user_id) and `exp` claims signed with `settings.secret_key`.
+   - verify_access_token(token): Decodes JWT, validates signature and expiration, and extracts user_id.
+
+
+3. AUTH DEPENDENCY (get_current_user & CurrentUser)
+   -----------------------------------------------
+   async def get_current_user(
+       token: Annotated[str, Depends(oauth2_scheme)],
+       db: Annotated[AsyncSession, Depends(get_db)],
+   ) -> models.User:
+       ...
+
+   CurrentUser = Annotated[models.User, Depends(get_current_user)]
+
+   - Extract token from `Authorization: Bearer <token>` header.
+   - Decode & verify JWT.
+   - Fetch user from PostgreSQL database.
+   - Injected directly into protected endpoints.
+
+
+4. PASSWORD RESET TOKEN GENERATION & HASHING
+   ------------------------------------------
+   def generate_reset_token() -> str:
+       return secrets.token_urlsafe(32)
+
+   def hash_reset_token(token: str) -> str:
+       return hashlib.sha256(token.encode()).hexdigest()
+
+   WHY HASH RESET TOKENS?
+   - `generate_reset_token()` uses Python's cryptographically secure `secrets` module to generate a unguessable 32-byte URL-safe string.
+   - The raw token is sent to the user via email.
+   - Only the SHA-256 hash (`token_hash`) is saved in PostgreSQL database.
+   - If the database is ever compromised, active reset tokens cannot be extracted to hijack user accounts.
+
+----------------------------------------------------------------
+FULL AUTHENTICATION & RESET WORKFLOW
+----------------------------------------------------------------
+
+LOGIN:
+  1. POST /api/users/token with email + password form data.
+  2. Verify credentials against `models.User.password_hash`.
+  3. Return JWT access token `{ "access_token": "...", "token_type": "bearer" }`.
+
+PASSWORD RESET:
+  1. User submits email (`POST /api/users/forgot-password`).
+  2. Server generates secret `token` and computes SHA-256 `token_hash`.
+  3. `token_hash` saved to `password_reset_tokens` table with expiration.
+  4. Raw `token` sent via email link (`http://frontend/reset-password?token=...`).
+  5. User submits `token` and `new_password` (`POST /api/users/reset-password`).
+  6. Server hashes submitted `token`, matches `token_hash` in DB, updates password, and purges reset tokens.
+
+================================================================

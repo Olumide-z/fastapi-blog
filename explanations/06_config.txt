@@ -1,0 +1,68 @@
+================================================================
+FILE: config.py  +  .env
+TOPIC: Configuration, Environment Variables & Settings
+================================================================
+
+PURPOSE
+-------
+`config.py` uses `pydantic_settings` to manage application environment variables.
+Sensitive credentials (database passwords, mail credentials, JWT secret keys) are
+loaded from `.env` files rather than hardcoded in source code.
+
+----------------------------------------------------------------
+THE .env FILE STRUCTURE
+----------------------------------------------------------------
+
+Example `.env` configuration:
+
+    SECRET_KEY=872b95deae9de088f5e7d508348fd3f0556d99fd46da762bfd222025a91cc49a
+    DATABASE_URL=postgresql+psycopg://bloguser:blogpass@localhost/blog
+
+    MAIL_SERVER=sandbox.smtp.mailtrap.io
+    MAIL_PORT=2525
+    MAIL_USERNAME=086c731b6d00b0
+    MAIL_PASSWORD=c329307b606233
+    MAIL_FROM=noreply@fastapiblog.com
+    MAIL_USE_TLS=true
+
+    FRONTEND_URL=http://localhost:8000
+
+----------------------------------------------------------------
+CONFIG.PY BREAKDOWN
+----------------------------------------------------------------
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding='utf-8'
+    )
+
+    database_url: str
+
+    secret_key: SecretStr
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+
+    max_upload_size_bytes: int = 5 * 1024 * 1024
+
+    reset_token_expire_minutes: int = 60
+
+    mail_server: str = "localhost"
+    mail_port: int = 587
+    mail_username: str = ""
+    mail_password: SecretStr = SecretStr("")
+    mail_from: str = "noreply@example.com"
+    mail_use_tls: bool = True
+
+    frontend_url: str = "http://localhost:8000"
+
+settings = Settings()
+
+KEY FEATURES:
+1. database_url: PostgreSQL connection string formatted for psycopg 3 (`postgresql+psycopg://...`).
+2. secret_key & mail_password: Typed as `SecretStr` to prevent accidental logging in stack traces or print statements. Use `.get_secret_value()` to retrieve raw strings.
+3. reset_token_expire_minutes: Time window (60 mins) before password reset tokens expire.
+4. mail_server / mail_port / mail_credentials: SMTP configuration used by `aiosmtplib` to send emails asynchronously.
+5. frontend_url: Base URL used to construct password reset links sent via email.
+
+================================================================

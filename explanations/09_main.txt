@@ -1,0 +1,33 @@
+================================================================
+FILE: main.py
+TOPIC: Application Entry Point, HTML Routing & Middleware
+================================================================
+
+PURPOSE
+-------
+`main.py` serves as the central startup entry point for the FastAPI application:
+1. Instantiates FastAPI app with async `lifespan` context manager.
+2. Initializes PostgreSQL schema creation on startup (or runs alongside Alembic migrations).
+3. Mounts static asset directories (`/static`, `/media`).
+4. Registers API route sub-routers (`/api/users`, `/api/posts`).
+5. Configures Jinja2 HTML page template rendering.
+6. Implements custom error exception handlers (JSON error responses for API, HTML error pages for browsers).
+
+----------------------------------------------------------------
+DATABASE LIFECYCLE & ALEMBIC
+----------------------------------------------------------------
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # Startup code: ensure tables exist in dev environment
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    # Shutdown code: close DB engine connections
+    await engine.dispose()
+
+NOTE ON PRODUCTION & ALEMBIC:
+While `Base.metadata.create_all` creates tables if they do not exist when running in local development,
+production database schema updates are executed via Alembic migrations (`alembic upgrade head`).
+
+================================================================

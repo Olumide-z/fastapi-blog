@@ -1,0 +1,92 @@
+================================================================
+FILE: schemas.py
+TOPIC: Pydantic Schemas (Request & Response Shapes)
+================================================================
+
+PURPOSE
+-------
+Schemas define the exact shape and data types for incoming HTTP request bodies
+and outgoing HTTP response bodies. Built with Pydantic, they automatically validate data,
+strip illegal inputs, format responses, and produce interactive OpenAPI documentation.
+
+----------------------------------------------------------------
+MODELS vs SCHEMAS
+----------------------------------------------------------------
+models.py  = Database tables in PostgreSQL (SQLAlchemy)
+schemas.py = API request/response contracts (Pydantic)
+
+You never return raw SQLAlchemy model instances directly to clients; you serialize
+them using Pydantic schemas to safeguard sensitive attributes (like password_hash).
+
+----------------------------------------------------------------
+SCHEMAS BREAKDOWN
+----------------------------------------------------------------
+
+1. USER SCHEMAS
+   -------------
+   - UserBase: Common fields (`username`, `email: EmailStr`).
+   - UserCreate: Inherits UserBase, adds `password: str = Field(min_length=8)`.
+   - UserPublic: Public user representation (`id`, `username`, `image_file`, `image_path`).
+   - UserPrivate: Sensitive user representation (`id`, `username`, `email`, `image_file`, `image_path`).
+   - UserUpdate: Supports partial user updates (`username`, `email`).
+
+   `ConfigDict(from_attributes=True)` enables Pydantic to read attributes directly from ORM objects.
+
+
+2. PASSWORD RESET & CHANGE SCHEMAS
+   ---------------------------------
+   - ForgotPasswordRequest:
+       class ForgotPasswordRequest(BaseModel):
+           email: EmailStr = Field(max_length=120)
+
+     Payload for requesting a password reset email (`POST /api/users/forgot-password`).
+
+   - PasswordResetRequest:
+       class PasswordResetRequest(BaseModel):
+           token: str
+           new_password: str = Field(min_length=8)
+
+     Payload for completing password reset using the token (`POST /api/users/reset-password`).
+
+   - ChangePasswordRequest:
+       class ChangePasswordRequest(BaseModel):
+           current_password: str
+           new_password: str = Field(min_length=8)
+
+     Payload for authenticated users changing their password (`PATCH /api/users/me/password`).
+
+
+3. AUTHENTICATION SCHEMAS
+   -----------------------
+   - Token:
+       class Token(BaseModel):
+           access_token: str
+           token_type: str
+
+     Returned upon successful login (`POST /api/users/token`).
+
+
+4. POST SCHEMAS & PAGINATION
+   ---------------------------
+   - PostBase: Common post fields (`title`, `content`).
+   - PostCreate: Used for creating posts (`POST /api/posts`).
+   - PostUpdate: Supports partial updates (`PATCH /api/posts/{id}`).
+   - PostResponse: Returned for single post requests (`id`, `user_id`, `date_posted`, `author: UserPublic`).
+   - PaginatedPostsResponse:
+       class PaginatedPostsResponse(BaseModel):
+           posts: list[PostResponse]
+           total: int
+           skip: int
+           limit: int
+           has_more: bool
+
+     Wraps paginated lists of posts to provide total record counts and pagination status metadata.
+
+----------------------------------------------------------------
+HOW IT ALL CONNECTS
+----------------------------------------------------------------
+
+Incoming JSON  →  Pydantic validates input using request schema  →  Route handles logic
+SQLAlchemy ORM →  FastAPI converts ORM object into response schema → Validated JSON to client
+
+================================================================

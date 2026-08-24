@@ -1,0 +1,7 @@
+.env
+venv/
+__pycache__/
+.pytest_cache/
+.vscode/
+media/profile_pics/*.jpg
+!media/profile_pics/.gitkeep

@@ -1,0 +1,102 @@
+================================================================
+FILE: models.py
+TOPIC: Database Models (PostgreSQL ORM Tables)
+================================================================
+
+PURPOSE
+-------
+This file defines the table schema structure of your PostgreSQL database using Python classes.
+Each class represents a single table in PostgreSQL. SQLAlchemy reads these classes and
+maps database rows to Python objects (ORM).
+
+----------------------------------------------------------------
+KEY CONCEPTS & MODELS
+----------------------------------------------------------------
+
+1. THE USER MODEL
+   ---------------
+   class User(Base):
+       __tablename__ = "users"
+
+   COLUMNS:
+   id            -> INTEGER, Primary Key, Indexed
+   username      -> VARCHAR(50), Unique, Not Null
+   email         -> VARCHAR(120), Unique, Not Null
+   password_hash -> VARCHAR(200), Not Null (stores hashed passwords)
+   image_file    -> VARCHAR(200), Optional / Nullable (stores profile picture filename)
+
+   RELATIONSHIPS:
+   posts: Mapped[list[Post]] = relationship(
+       back_populates="author", cascade="all, delete-orphan"
+   )
+   reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
+       back_populates="user", cascade="all, delete-orphan"
+   )
+
+   PROPERTY:
+   @property
+   def image_path(self) -> str:
+       if self.image_file:
+           return f"/media/profile_pics/{self.image_file}"
+       return "/static/profile_pics/default.jpg"
+
+   `cascade="all, delete-orphan"` ensures that if a User is deleted from the database,
+   all associated Posts and PasswordResetTokens are automatically deleted.
+
+
+2. THE POST MODEL
+   ---------------
+   class Post(Base):
+       __tablename__ = "posts"
+
+   COLUMNS:
+   id          -> INTEGER, Primary Key, Indexed
+   title       -> VARCHAR(100), Not Null
+   content     -> TEXT, Not Null
+   user_id     -> INTEGER, Foreign Key ("users.id"), Indexed, Not Null
+   date_posted -> DATETIME (timezone aware), defaults to current UTC time
+   likes       -> INTEGER, default=0, server_default="0"
+
+   RELATIONSHIP:
+   author: Mapped[User] = relationship(back_populates="posts", lazy="selectin")
+
+   `lazy="selectin"` tells SQLAlchemy to eagerly fetch the author User details
+   in a secondary query whenever a Post is loaded, avoiding N+1 performance bottlenecks.
+
+
+3. THE PASSWORD RESET TOKEN MODEL
+   ------------------------------
+   class PasswordResetToken(Base):
+       __tablename__ = "password_reset_tokens"
+
+   COLUMNS:
+   id          -> INTEGER, Primary Key, Indexed
+   user_id     -> INTEGER, Foreign Key ("users.id"), Not Null
+   token_hash  -> VARCHAR(64), Unique, Not Null (SHA-256 hash of random reset token)
+   expires_at  -> DATETIME (timezone aware), Not Null
+   created_at  -> DATETIME (timezone aware), defaults to current UTC time
+
+   RELATIONSHIP:
+   user: Mapped[User] = relationship(back_populates="reset_tokens")
+
+   SECURITY DESIGN:
+   - Instead of storing plaintext tokens, we store a cryptographic hash (`token_hash`).
+   - If the database is compromised, active reset links sent via email cannot be extracted.
+   - Tokens carry an explicit `expires_at` timestamp.
+
+
+----------------------------------------------------------------
+HOW IT ALL CONNECTS
+----------------------------------------------------------------
+
+models.py  →  Inherits from Base (database.py)
+           →  Defines User, Post, and PasswordResetToken tables in PostgreSQL
+           →  Relationships provide object navigation:
+                 user.posts         -> list of Post instances
+                 user.reset_tokens  -> list of active/expired PasswordResetToken instances
+                 post.author        -> User instance who created the post
+                 reset_token.user   -> User instance requesting password reset
+
+Schema updates and table creation in PostgreSQL are managed using Alembic migrations.
+
+================================================================

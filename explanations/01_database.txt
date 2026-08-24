@@ -1,0 +1,122 @@
+================================================================
+FILE: database.py
+TOPIC: Database Setup & Session Management (PostgreSQL & SQLAlchemy)
+================================================================
+
+PURPOSE
+-------
+This file is the foundation of the entire database layer. It sets up the
+async connection to the PostgreSQL database via SQLAlchemy and provides a
+"session" dependency that every route function uses to talk to the database.
+
+----------------------------------------------------------------
+WHAT IS SQLAlchemy & PostgreSQL?
+----------------------------------------------------------------
+PostgreSQL is a powerful, production-ready relational database management
+system (RDBMS). 
+
+SQLAlchemy is a Python library that acts as an Object-Relational Mapper (ORM).
+It translates Python code into native SQL queries for PostgreSQL. Instead of
+writing raw SQL like:
+
+    SELECT * FROM users WHERE id = 1;
+
+You write Python like:
+
+    select(models.User).where(models.User.id == 1)
+
+SQLAlchemy translates that Python into PostgreSQL-compatible SQL syntax.
+
+----------------------------------------------------------------
+KEY CONCEPTS IN THIS FILE
+----------------------------------------------------------------
+
+1. DATABASE URL (from config.py / .env)
+   -------------------------------------
+   engine = create_async_engine(settings.database_url)
+
+   The database connection URL is loaded dynamically from application settings
+   (defined in config.py and .env):
+
+       DATABASE_URL=postgresql+psycopg://bloguser:blogpass@localhost/blog
+
+   Breakdown of the connection URL format:
+   - "postgresql+psycopg" -> Database dialect (PostgreSQL) and async DBAPI driver (psycopg 3)
+   - "bloguser:blogpass"  -> Database username and password
+   - "@localhost"          -> Host server running PostgreSQL
+   - "/blog"               -> Target database name
+
+   Unlike SQLite (which stores everything in a local single file), PostgreSQL
+   runs as a dedicated service managing transactions, concurrent access, and security.
+
+
+2. ENGINE
+   -------
+   engine = create_async_engine(settings.database_url)
+
+   The "engine" is the core connection pool manager. Think of it as the network
+   pipe between your FastAPI application and the PostgreSQL server. You create
+   it once at application load and reuse it across requests.
+
+
+3. SESSION FACTORY (AsyncSessionLocal)
+   -------------------------------------
+   AsyncSessionLocal = async_sessionmaker(
+       engine,
+       class_=AsyncSession,
+       expire_on_commit=False,
+   )
+
+   A "session" is a temporary unit-of-work workspace for database operations:
+   - You execute queries, add new objects, or delete records.
+   - At the end of the operation, you either `await db.commit()` (save changes to PostgreSQL)
+     or `await db.rollback()` (undo pending changes).
+
+   async_sessionmaker is a factory that generates new AsyncSession objects for each request.
+
+   expire_on_commit=False
+   -> Prevents SQLAlchemy from expiring object attributes after a transaction commits.
+      This ensures data attributes remain accessible on Python objects after saving,
+      which is required when returning responses from FastAPI routes.
+
+
+4. BASE CLASS
+   ----------
+   class Base(DeclarativeBase):
+       pass
+
+   The declarative base class that all ORM models (User, Post, PasswordResetToken)
+   inherit from. SQLAlchemy uses this class registry to:
+   - Map classes to PostgreSQL table definitions.
+   - Interact with Alembic for auto-generating database migrations.
+
+
+5. get_db() DEPENDENCY
+   --------------------
+   async def get_db():
+       async with AsyncSessionLocal() as session:
+           yield session
+
+   This is a FastAPI dependency generator function. When injected into route functions:
+   - Opens a clean AsyncSession per incoming HTTP request.
+   - Hands the session to the route function via `yield`.
+   - Automatically closes and releases the database connection back to the pool
+     when the request completes (even if an exception occurred).
+
+   In your routes:
+       async def my_route(db: Annotated[AsyncSession, Depends(get_db)]):
+           ...
+
+----------------------------------------------------------------
+HOW IT ALL CONNECTS
+----------------------------------------------------------------
+
+database.py  →  engine (manages PostgreSQL pool via psycopg)
+             →  AsyncSessionLocal (creates session instances)
+             →  Base (parent registry for all models)
+             →  get_db() (FastAPI dependency injected into routes)
+
+Every API endpoint that requires database interaction accepts `db: Annotated[AsyncSession, Depends(get_db)]`.
+FastAPI automatically handles session lifecycle management, ensuring no leaked connections.
+
+================================================================
